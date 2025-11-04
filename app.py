@@ -8,14 +8,12 @@ from moviepy.editor import VideoFileClip, TextClip, CompositeVideoClip
 import tempfile
 from flask import Flask
 from threading import Thread
+import gc
 
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# טעינת מודל Whisper
-model = whisper.load_model("base")
-
-# Flask app לשמירת השרת פעיל
+# Flask app
 app = Flask(__name__)
 
 @app.route('/')
@@ -33,63 +31,100 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "ואני אחזיר לך את הסרטון עם כתוביות בעברית! 🇮🇱\n\n"
         "📹 פשוט שלח סרטון ואני אתחיל...\n\n"
         "⚠️ מגבלות:\n"
-        "• סרטון עד 10 דקות\n"
-        "• גודל עד 50MB"
+        "• סרטון עד 5 דקות\n"
+        "• גודל עד 20MB"
     )
 
 async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    video_path = None
+    audio_path = None
+    output_path = None
+    video = None
+    
     try:
-        # בדיקת גודל קובץ
-        if update.message.video.file_size > 50 * 1024 * 1024:
-            await update.message.reply_text("❌ הסרטון גדול מדי! מקסימום 50MB")
+        # בדיקת גודל - הקטנו ל-20MB
+        if update.message.video.file_size > 20 * 1024 * 1024:
+            await update.message.reply_text("❌ הסרטון גדול מדי! מקסימום 20MB")
             return
         
-        status_msg = await update.message.reply_text("⏳ מעבד את הסרטון... אנא המתן (זה יכול לקחת 2-5 דקות)")
+        status_msg = await update.message.reply_text("⏳ מעבד את הסרטון... אנא המתן")
         
         video_file = await update.message.video.get_file()
         
+        # שימוש ב-tempfile עם ניקוי אוטומטי
         with tempfile.NamedTemporaryFile(delete=False, suffix='.mp4') as temp_video:
             await video_file.download_to_drive(temp_video.name)
             video_path = temp_video.name
         
         await status_msg.edit_text("🎤 מחלץ אודיו...")
         
+        # חילוץ אודיו
         video = VideoFileClip(video_path)
+        
+        # בדיקת אורך סרטון
+        if video.duration > 300:  # 5 דקות
+            await update.message.reply_text("❌ הסרטון ארוך מדי! מקסימום 5 דקות")
+            video.close()
+            os.remove(video_path)
+            return
+        
         audio_path = video_path.replace('.mp4', '.wav')
         video.audio.write_audiofile(audio_path, verbose=False, logger=None)
         
+        # סגירת הסרטון כדי לפנות זיכרון
+        video.close()
+        video = None
+        gc.collect()  # ניקוי זיכרון
+        
         await status_msg.edit_text("🗣️ מתמלל דיבור...")
         
-        result = model.transcribe(audio_path, language='en')
+        # טעינת מודל Whisper רק כשצריך
+        model = whisper.load_model("tiny")  # שימוש במודל קטן יותר!
+        result = model.transcribe(audio_path, language='en', fp16=False)
         segments = result['segments']
+        
+        # מחיקת המודל מהזיכרון
+        del model
+        gc.collect()
         
         await status_msg.edit_text("🌍 מתרגם לעברית...")
         
         translator = GoogleTranslator(source='en', target='he')
         subtitles = []
         
+        # תרגום בחלקים קטנים
         for seg in segments:
             text = seg['text'].strip()
-            if text:
-                translated = translator.translate(text)
-                subtitles.append({
-                    'start': seg['start'],
-                    'end': seg['end'],
-                    'text': translated
-                })
+            if text and len(text) > 2:
+                try:
+                    translated = translator.translate(text)
+                    subtitles.append({
+                        'start': seg['start'],
+                        'end': seg['end'],
+                        'text': translated
+                    })
+                except:
+                    continue
+        
+        if not subtitles:
+            await update.message.reply_text("❌ לא נמצא טקסט לתרגום")
+            return
         
         await status_msg.edit_text("🎨 מוסיף כתוביות לסרטון...")
+        
+        # פתיחה מחדש של הסרטון
+        video = VideoFileClip(video_path)
         
         txt_clips = []
         for sub in subtitles:
             txt_clip = (TextClip(
                 sub['text'],
-                fontsize=24,
+                fontsize=22,  # פונט קצת יותר קטן
                 color='white',
                 bg_color='black',
-                font='DejaVu-Sans',
+                font='Arial',  # פונט פשוט יותר
                 method='caption',
-                size=(video.w * 0.9, None)
+                size=(video.w * 0.85, None)
             )
             .set_position(('center', video.h * 0.85))
             .set_start(sub['start'])
@@ -100,33 +135,56 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         final_video = CompositeVideoClip([video] + txt_clips)
         output_path = video_path.replace('.mp4', '_subtitled.mp4')
         
+        # כתיבת וידאו עם הגדרות נמוכות יותר
         final_video.write_videofile(
             output_path,
             codec='libx264',
             audio_codec='aac',
+            preset='ultrafast',  # מהיר יותר, פחות זיכרון
+            threads=2,  # הגבלת threads
             verbose=False,
             logger=None
         )
         
+        # סגירה וניקוי
+        final_video.close()
+        video.close()
+        gc.collect()
+        
         await status_msg.edit_text("📤 שולח את הסרטון...")
         
-        with open(output_path, 'rb') as video_file:
+        # שליחת הקובץ
+        with open(output_path, 'rb') as video_file_to_send:
             await update.message.reply_video(
-                video=video_file,
-                caption="✅ הנה הסרטון שלך עם כתוביות בעברית!"
+                video=video_file_to_send,
+                caption="✅ הנה הסרטון שלך עם כתוביות בעברית!",
+                read_timeout=60,
+                write_timeout=60
             )
         
         await status_msg.delete()
         
-        # ניקוי קבצים
-        video.close()
-        os.remove(video_path)
-        os.remove(audio_path)
-        os.remove(output_path)
-        
     except Exception as e:
         logger.error(f"Error: {e}")
-        await update.message.reply_text(f"❌ שגיאה בעיבוד הסרטון: {str(e)}")
+        await update.message.reply_text(f"❌ שגיאה בעיבוד הסרטון: {str(e)}\n\nנסה סרטון קטן יותר.")
+        
+    finally:
+        # ניקוי קבצים - תמיד!
+        try:
+            if video:
+                video.close()
+        except:
+            pass
+        
+        for file_path in [video_path, audio_path, output_path]:
+            try:
+                if file_path and os.path.exists(file_path):
+                    os.remove(file_path)
+                    logger.info(f"Deleted: {file_path}")
+            except Exception as e:
+                logger.error(f"Failed to delete {file_path}: {e}")
+        
+        gc.collect()  # ניקוי סופי
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.error(f"Exception: {context.error}")
@@ -155,9 +213,6 @@ def run_flask():
     app.run(host='0.0.0.0', port=port)
 
 if __name__ == '__main__':
-    # הרצת Flask בתהליך נפרד
     flask_thread = Thread(target=run_flask, daemon=True)
     flask_thread.start()
-    
-    # הרצת הבוט
     run_bot()
