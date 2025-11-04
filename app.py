@@ -13,7 +13,6 @@ import gc
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Flask app
 app = Flask(__name__)
 
 @app.route('/')
@@ -72,7 +71,6 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     video = None
     
     try:
-        # בדיקת גודל
         if update.message.video.file_size > 50 * 1024 * 1024:
             await update.message.reply_text("❌ הסרטון גדול מדי! מקסימום 50MB")
             return
@@ -89,8 +87,7 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         video = VideoFileClip(video_path)
         
-        # בדיקת אורך
-        if video.duration > 600:  # 10 דקות
+        if video.duration > 600:
             await update.message.reply_text("❌ הסרטון ארוך מדי! מקסימום 10 דקות")
             video.close()
             os.remove(video_path)
@@ -105,7 +102,6 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         await status_msg.edit_text("🗣️ מתמלל דיבור עם Groq (מהיר!)...")
         
-        # תמלול עם Groq
         result = transcribe_with_groq(audio_path)
         segments = result.get('segments', [])
         
