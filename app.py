@@ -139,20 +139,44 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         txt_clips = []
         for sub in subtitles:
-            txt_clip = (TextClip(
-                sub['text'],
-                fontsize=22,
-                color='white',
-                bg_color='black',
-                font='Arial',
-                method='caption',
-                size=(video.w * 0.85, None)
-            )
-            .set_position(('center', video.h * 0.85))
-            .set_start(sub['start'])
-            .set_duration(sub['end'] - sub['start']))
-            
-            txt_clips.append(txt_clip)
+            try:
+                # ניסיון ראשון: DejaVu Sans (תומך בעברית)
+                txt_clip = (TextClip(
+                    sub['text'],
+                    fontsize=32,
+                    color='white',
+                    bg_color='black',
+                    font='DejaVu-Sans-Bold',
+                    method='caption',
+                    size=(video.w * 0.9, None),
+                    stroke_color='black',
+                    stroke_width=2
+                )
+                .set_position(('center', video.h * 0.82))
+                .set_start(sub['start'])
+                .set_duration(sub['end'] - sub['start']))
+                
+                txt_clips.append(txt_clip)
+            except:
+                # ניסיון שני: פונט חלופי
+                try:
+                    txt_clip = (TextClip(
+                        sub['text'],
+                        fontsize=32,
+                        color='white',
+                        bg_color='black',
+                        font='DejaVu-Sans',
+                        method='caption',
+                        size=(video.w * 0.9, None)
+                    )
+                    .set_position(('center', video.h * 0.82))
+                    .set_start(sub['start'])
+                    .set_duration(sub['end'] - sub['start']))
+                    
+                    txt_clips.append(txt_clip)
+                except Exception as e:
+                    logger.error(f"Failed to create text clip: {e}")
+                    continue
         
         final_video = CompositeVideoClip([video] + txt_clips)
         output_path = video_path.replace('.mp4', '_subtitled.mp4')
@@ -232,7 +256,7 @@ def run_bot():
 
 def run_flask():
     port = int(os.environ.get('PORT', 10000))
-    app.run(host='0.0.0.0', port=port)
+    app.run(host='0.0.0', port=port)
 
 if __name__ == '__main__':
     flask_thread = Thread(target=run_flask, daemon=True)
