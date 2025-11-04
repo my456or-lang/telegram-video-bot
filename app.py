@@ -113,7 +113,7 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         await status_msg.edit_text("🌍 מתרגם לעברית...")
         
-        translator = GoogleTranslator(source='en', target='he')
+        translator = GoogleTranslator(source='en', target='iw')
         subtitles = []
         
         for seg in segments:
