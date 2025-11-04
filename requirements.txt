@@ -1,0 +1,7 @@
+numpy<2.0.0
+Pillow
+python-telegram-bot==20.7
+deep-translator
+moviepy
+flask
+requests
