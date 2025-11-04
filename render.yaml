@@ -1,0 +1,6 @@
+services:
+  - type: web
+    name: telegram-video-bot
+    env: python
+    buildCommand: "bash install_fonts.sh && pip install -r requirements.txt"
+    startCommand: "python bot.py"
