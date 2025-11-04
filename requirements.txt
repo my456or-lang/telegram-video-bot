@@ -1,7 +1,7 @@
 python-telegram-bot==21.0
 deep-translator==1.11.4
 moviepy==1.0.3
-flask==3.0.0
-requests==2.31.0
-ffmpeg-python==0.2.0
-Pillow==10.1.0
+flask
+requests
+ffmpeg-python
+Pillow
