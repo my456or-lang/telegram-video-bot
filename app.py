@@ -75,7 +75,8 @@ def prepare_hebrew_text(text):
         reshaped_text = arabic_reshaper.reshape(text)
         bidi_text = get_display(reshaped_text)
         return bidi_text
-    except:
+    except Exception as e:
+        logger.warning(f"Failed to prepare Hebrew text: {e}")
         # אם יש בעיה, החזר את הטקסט המקורי
         return text
 
@@ -95,8 +96,10 @@ def get_font(size=40):
     for font_path in font_paths:
         try:
             if os.path.exists(font_path):
+                logger.info(f"Using font: {font_path}")
                 return ImageFont.truetype(font_path, size)
-        except:
+        except Exception as e:
+            logger.debug(f"Could not load font {font_path}: {e}")
             continue
     
     # אם לא נמצא פונט, השתמש בברירת מחדל
@@ -111,8 +114,12 @@ def wrap_text(text, font, max_width, draw):
     
     for word in words:
         test_line = ' '.join(current_line + [word])
-        bbox = draw.textbbox((0, 0), test_line, font=font)
-        width = bbox[2] - bbox[0]
+        try:
+            bbox = draw.textbbox((0, 0), test_line, font=font)
+            width = bbox[2] - bbox[0]
+        except:
+            # fallback for older PIL versions
+            width = draw.textsize(test_line, font=font)[0]
         
         if width <= max_width:
             current_line.append(word)
@@ -135,14 +142,14 @@ def make_text_image(text, width, height):
     hebrew_text = prepare_hebrew_text(text)
     
     # טעינת פונט
-    font = get_font(size=32)
+    font = get_font(size=36)
     
     # חלוקת הטקסט לשורות
     max_text_width = int(width * 0.9)
     lines = wrap_text(hebrew_text, font, max_text_width, draw)
     
     # חישוב גובה כולל
-    line_height = 40
+    line_height = 45
     total_height = len(lines) * line_height
     
     # מיקום התחלתי
@@ -150,18 +157,29 @@ def make_text_image(text, width, height):
     
     # ציור כל שורה
     for i, line in enumerate(lines):
-        bbox = draw.textbbox((0, 0), line, font=font)
-        text_width = bbox[2] - bbox[0]
-        text_height = bbox[3] - bbox[1]
+        try:
+            bbox = draw.textbbox((0, 0), line, font=font)
+            text_width = bbox[2] - bbox[0]
+            text_height = bbox[3] - bbox[1]
+        except:
+            # fallback for older PIL versions
+            text_width, text_height = draw.textsize(line, font=font)
         
         x = (width - text_width) // 2
         y = y_start + (i * line_height)
         
         # רקע שחור למלל
-        padding = 10
+        padding = 12
         draw.rectangle(
             [x - padding, y - padding, x + text_width + padding, y + text_height + padding],
             fill=(0, 0, 0, 200)
+        )
+        
+        # גבול לבן דק סביב הרקע (אופציונלי)
+        draw.rectangle(
+            [x - padding, y - padding, x + text_width + padding, y + text_height + padding],
+            outline=(255, 255, 255, 100),
+            width=1
         )
         
         # המלל עצמו
@@ -177,11 +195,14 @@ def create_hebrew_subtitle_clip(text, start, duration, video_size):
     def make_frame(t):
         return make_text_image(text, width, subtitle_height)
     
-    clip = VideoClip(make_frame, duration=duration)
-    clip = clip.set_start(start)
-    clip = clip.set_position(('center', height - subtitle_height - 20))
-    
-    return clip
+    try:
+        clip = VideoClip(make_frame, duration=duration)
+        clip = clip.set_start(start)
+        clip = clip.set_position(('center', height - subtitle_height - 20))
+        return clip
+    except Exception as e:
+        logger.error(f"Error creating subtitle clip: {e}")
+        raise
 
 async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     video_path = None
@@ -202,6 +223,8 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await video_file.download_to_drive(temp_video.name)
             video_path = temp_video.name
         
+        logger.info(f"Video downloaded: {video_path}")
+        
         await status_msg.edit_text("🎤 מחלץ אודיו...")
         
         video = VideoFileClip(video_path)
@@ -216,6 +239,8 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         video.audio.write_audiofile(audio_path, verbose=False, logger=None)
         
         video_size = video.size
+        logger.info(f"Video size: {video_size}, duration: {video.duration}")
+        
         video.close()
         video = None
         gc.collect()
@@ -224,6 +249,8 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         result = transcribe_with_groq(audio_path)
         segments = result.get('segments', [])
+        
+        logger.info(f"Found {len(segments)} segments")
         
         if not segments:
             await update.message.reply_text("❌ לא נמצא דיבור באודיו")
@@ -246,6 +273,7 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         'end': seg['end'],
                         'text': translated
                     })
+                    logger.info(f"Translated: {text[:30]} -> {translated[:30]}")
                 except Exception as e:
                     logger.error(f"Translation error: {e}")
                     continue
@@ -254,12 +282,14 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ לא נמצא טקסט לתרגום")
             return
         
+        logger.info(f"Created {len(subtitles)} subtitles")
+        
         await status_msg.edit_text("🎨 מוסיף כתוביות לסרטון...")
         
         video = VideoFileClip(video_path)
         
         txt_clips = []
-        for sub in subtitles:
+        for i, sub in enumerate(subtitles):
             try:
                 clip = create_hebrew_subtitle_clip(
                     sub['text'],
@@ -268,13 +298,16 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     video_size
                 )
                 txt_clips.append(clip)
+                logger.info(f"Created subtitle clip {i+1}/{len(subtitles)}")
             except Exception as e:
-                logger.error(f"Failed to create subtitle clip: {e}")
+                logger.error(f"Failed to create subtitle clip {i}: {e}")
                 continue
         
         if not txt_clips:
             await update.message.reply_text("❌ נכשל ביצירת כתוביות")
             return
+        
+        logger.info(f"Compositing video with {len(txt_clips)} subtitle clips")
         
         final_video = CompositeVideoClip([video] + txt_clips)
         output_path = video_path.replace('.mp4', '_subtitled.mp4')
@@ -288,6 +321,8 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
             verbose=False,
             logger=None
         )
+        
+        logger.info("Video compositing complete")
         
         final_video.close()
         video.close()
@@ -304,10 +339,14 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         
         await status_msg.delete()
+        logger.info("Video sent successfully!")
         
     except Exception as e:
-        logger.error(f"Error: {e}", exc_info=True)
-        await update.message.reply_text(f"❌ שגיאה: {str(e)}")
+        logger.error(f"Error in handle_video: {e}", exc_info=True)
+        try:
+            await update.message.reply_text(f"❌ שגיאה: {str(e)}")
+        except:
+            pass
         
     finally:
         try:
@@ -320,6 +359,7 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 if file_path and os.path.exists(file_path):
                     os.remove(file_path)
+                    logger.info(f"Cleaned up: {file_path}")
             except Exception as e:
                 logger.error(f"Failed to delete {file_path}: {e}")
         
