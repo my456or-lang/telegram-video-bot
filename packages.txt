@@ -1,0 +1,7 @@
+fonts-dejavu-core
+fonts-liberation
+ffmpeg
+libsm6
+libxext6
+libxrender-dev
+libgomp1
