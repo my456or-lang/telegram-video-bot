@@ -11,6 +11,8 @@ import requests
 import gc
 from PIL import Image, ImageDraw, ImageFont
 import numpy as np
+from bidi.algorithm import get_display
+import arabic_reshaper
 
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -66,58 +68,118 @@ def transcribe_with_groq(audio_path):
     
     return response.json()
 
+def prepare_hebrew_text(text):
+    """הכנת טקסט עברי לתצוגה נכונה"""
+    try:
+        # שימוש ב-bidi כדי להפוך את סדר הטקסט לנכון
+        reshaped_text = arabic_reshaper.reshape(text)
+        bidi_text = get_display(reshaped_text)
+        return bidi_text
+    except:
+        # אם יש בעיה, החזר את הטקסט המקורי
+        return text
+
+def get_font(size=40):
+    """מציאת פונט עברי מתאים"""
+    font_paths = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
+        "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
+        "/System/Library/Fonts/Supplemental/Arial.ttf",
+        "C:\\Windows\\Fonts\\arial.ttf"
+    ]
+    
+    for font_path in font_paths:
+        try:
+            if os.path.exists(font_path):
+                return ImageFont.truetype(font_path, size)
+        except:
+            continue
+    
+    # אם לא נמצא פונט, השתמש בברירת מחדל
+    logger.warning("לא נמצא פונט TTF, משתמש בפונט ברירת מחדל")
+    return ImageFont.load_default()
+
+def wrap_text(text, font, max_width, draw):
+    """חלוקת טקסט לשורות לפי רוחב מקסימלי"""
+    words = text.split()
+    lines = []
+    current_line = []
+    
+    for word in words:
+        test_line = ' '.join(current_line + [word])
+        bbox = draw.textbbox((0, 0), test_line, font=font)
+        width = bbox[2] - bbox[0]
+        
+        if width <= max_width:
+            current_line.append(word)
+        else:
+            if current_line:
+                lines.append(' '.join(current_line))
+            current_line = [word]
+    
+    if current_line:
+        lines.append(' '.join(current_line))
+    
+    return lines
+
 def make_text_image(text, width, height):
-    """יצירת תמונה עם טקסט עברי - עוקף את בעיית moviepy"""
+    """יצירת תמונה עם טקסט עברי"""
     img = Image.new('RGBA', (width, height), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
     
-    try:
-        # נסה להשתמש בפונט DejaVu שתומך בעברית
-        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 36)
-    except:
-        try:
-            # אם לא עובד, נסה FreeSans
-            font = ImageFont.truetype("/usr/share/fonts/truetype/freefont/FreeSans.ttf", 36)
-        except:
-            try:
-                # נסה פונט נוסף
-                font = ImageFont.truetype("/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf", 36)
-            except:
-                # אחרון - פונט ברירת מחדל
-                font = ImageFont.load_default()
+    # הכנת הטקסט העברי
+    hebrew_text = prepare_hebrew_text(text)
     
-    # מדידת גודל הטקסט
-    bbox = draw.textbbox((0, 0), text, font=font)
-    text_width = bbox[2] - bbox[0]
-    text_height = bbox[3] - bbox[1]
+    # טעינת פונט
+    font = get_font(size=32)
     
-    # מרכוז הטקסט
-    x = (width - text_width) // 2
-    y = (height - text_height) // 2
+    # חלוקת הטקסט לשורות
+    max_text_width = int(width * 0.9)
+    lines = wrap_text(hebrew_text, font, max_text_width, draw)
     
-    # רקע שחור מתחת לטקסט
-    padding = 15
-    draw.rectangle(
-        [x - padding, y - padding, x + text_width + padding, y + text_height + padding],
-        fill=(0, 0, 0, 220)
-    )
+    # חישוב גובה כולל
+    line_height = 40
+    total_height = len(lines) * line_height
     
-    # טקסט לבן
-    draw.text((x, y), text, font=font, fill=(255, 255, 255, 255))
+    # מיקום התחלתי
+    y_start = (height - total_height) // 2
+    
+    # ציור כל שורה
+    for i, line in enumerate(lines):
+        bbox = draw.textbbox((0, 0), line, font=font)
+        text_width = bbox[2] - bbox[0]
+        text_height = bbox[3] - bbox[1]
+        
+        x = (width - text_width) // 2
+        y = y_start + (i * line_height)
+        
+        # רקע שחור למלל
+        padding = 10
+        draw.rectangle(
+            [x - padding, y - padding, x + text_width + padding, y + text_height + padding],
+            fill=(0, 0, 0, 200)
+        )
+        
+        # המלל עצמו
+        draw.text((x, y), line, font=font, fill=(255, 255, 255, 255))
     
     return np.array(img)
 
 def create_hebrew_subtitle_clip(text, start, duration, video_size):
     """יצירת קליפ כתובית עברית"""
     width, height = video_size
-    subtitle_height = 120
+    subtitle_height = 150  # גובה גדול יותר למקרה של שורות מרובות
     
     def make_frame(t):
         return make_text_image(text, width, subtitle_height)
     
     clip = VideoClip(make_frame, duration=duration)
     clip = clip.set_start(start)
-    clip = clip.set_position(('center', height - subtitle_height - 40))
+    clip = clip.set_position(('center', height - subtitle_height - 20))
     
     return clip
 
@@ -184,7 +246,8 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         'end': seg['end'],
                         'text': translated
                     })
-                except:
+                except Exception as e:
+                    logger.error(f"Translation error: {e}")
                     continue
         
         if not subtitles:
@@ -208,6 +271,10 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 logger.error(f"Failed to create subtitle clip: {e}")
                 continue
+        
+        if not txt_clips:
+            await update.message.reply_text("❌ נכשל ביצירת כתוביות")
+            return
         
         final_video = CompositeVideoClip([video] + txt_clips)
         output_path = video_path.replace('.mp4', '_subtitled.mp4')
@@ -239,7 +306,7 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await status_msg.delete()
         
     except Exception as e:
-        logger.error(f"Error: {e}")
+        logger.error(f"Error: {e}", exc_info=True)
         await update.message.reply_text(f"❌ שגיאה: {str(e)}")
         
     finally:
@@ -259,7 +326,7 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         gc.collect()
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    logger.error(f"Exception: {context.error}")
+    logger.error(f"Exception: {context.error}", exc_info=context.error)
 
 def run_bot():
     TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
