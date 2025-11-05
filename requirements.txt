@@ -2,10 +2,13 @@ numpy<2.0.0
 Pillow>=10.0.0
 python-telegram-bot==20.7
 deep-translator>=1.11.0
-moviepy>=1.0.3
+moviepy==1.0.3
 flask>=3.0.0
 python-bidi>=0.4.2
 arabic-reshaper>=3.0.0
-imageio>=2.31.0
-imageio-ffmpeg>=0.4.9
+imageio==2.34.0
+imageio-ffmpeg==0.4.9
 requests>=2.31.0
+decorator==4.4.2
+proglog==0.1.10
+tqdm==4.66.2
